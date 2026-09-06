@@ -1,0 +1,17 @@
+/downloads/
+/logs/
+/models/
+/outputs/
+/runtime/
+/runtime-source/
+/runtime-stream/
+/__pycache__/
+*.pyc
+/.publish-local.ps1
+/server-q4.json
+/server-q8.json
+/server-stable.json
+/server-stream.json
+/web_server-stable.py
+/download_remaining.py
+/gpu_keepalive.py

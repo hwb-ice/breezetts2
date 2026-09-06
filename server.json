@@ -1,0 +1,26 @@
+{
+  "host": "127.0.0.1",
+  "port": 7860,
+  "backend": "cuda",
+  "device": 0,
+  "threads": 4,
+  "lazy_load": false,
+  "max_loaded_models": 1,
+  "idle_unload_ms": 0,
+  "models": [
+    {
+      "id": "breeze-tts-2",
+      "family": "breeze_tts",
+      "path": "models/Breeze-TTS-2-GGUF/breeze-tts-2-q4_k.gguf",
+      "task": "tts",
+      "mode": "streaming",
+      "default_request_options": {
+        "guidance_scale": 1.0,
+        "text_chunk_size": 120,
+        "max_tokens": 600,
+        "instruction": "自然清晰的普通话，温暖的女声，正常语速。"
+      },
+      "model_spec_override": "runtime/model_specs/breeze_tts.json"
+    }
+  ]
+}

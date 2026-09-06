@@ -1,0 +1,12 @@
+{
+  "name": "final_latency_short",
+  "chunk": 120,
+  "cfg": 1,
+  "elapsed_s": 3.025779600000078,
+  "audio_s": 4.72,
+  "rtf": 0.6410550000000166,
+  "first_audio_s": 0.4723201000001609,
+  "chunks": 12,
+  "playback_gap_count": 0,
+  "playback_gap_s": 0
+}

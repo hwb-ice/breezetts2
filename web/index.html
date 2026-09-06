@@ -1,0 +1,13 @@
+<!doctype html>
+<html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Breeze TTS 2 本地实时语音</title>
+<style>body{font:16px system-ui;background:#f4f7fa;color:#163044;max-width:820px;margin:50px auto;padding:0 24px}h1{font-size:30px}label{display:block;margin:20px 0 8px}textarea,input,select,button{font:inherit;padding:12px;border:1px solid #b9cbd5;border-radius:10px;box-sizing:border-box}textarea,input{width:100%}textarea{height:150px}button{cursor:pointer;background:#116858;color:white;margin:20px 12px 12px 0}button:disabled{opacity:.5}#status{white-space:pre-wrap;padding:18px;background:white;border-radius:12px;line-height:1.8}small{color:#506575}a{color:#116858}</style>
+<h1>Breeze TTS 2 · 本地实时语音</h1><p>RTX 4060 · CUDA · Q4_K · 声学帧流式生成与播放</p>
+<label for="text">朗读文本</label><textarea id="text">你好，这里是本地语音助手。今天我们测试中文语音合成，看看这台电脑能否流畅地实时朗读。希望你听到的声音自然清晰。</textarea>
+<label for="instruction">声音描述</label><input id="instruction" value="自然清晰的普通话，温暖的女声，正常语速。">
+<label for="chunk">长文本分段字数</label><select id="chunk"><option>60</option><option selected>120</option><option>200</option></select>
+<label for="cfg">风格引导</label><select id="cfg"><option value="1">速度优先（CFG 1）</option><option value="4">更强风格引导（CFG 4，较慢）</option></select>
+<div><button id="run">生成并实时播放</button><button id="stop" disabled>停止播放</button><a id="download" hidden>下载 WAV</a></div>
+<div id="status">等待生成。首次请求需要预热，后续请求会更快。</div>
+<p><small>音频在整句生成完成前就开始播放。首次启动会自动预热。停止播放不会取消已经提交的 GPU 合成任务。</small></p>
+<p><a href="http://127.0.0.1:7860" target="_blank">完整界面 / 声音克隆</a></p><script src="/app.js"></script></html>

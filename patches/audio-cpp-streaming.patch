@@ -1,0 +1,233 @@
+diff --git a/app/server/http.cpp b/app/server/http.cpp
+index d22b0f6..752527a 100644
+--- a/app/server/http.cpp
++++ b/app/server/http.cpp
+@@ -32,6 +32,7 @@ constexpr SocketHandle kInvalidSocket = INVALID_SOCKET;
+ #else
+ #include <arpa/inet.h>
+ #include <netinet/in.h>
++#include <netinet/tcp.h>
+ #include <poll.h>
+ #include <sys/select.h>
+ #include <sys/socket.h>
+@@ -725,6 +726,9 @@ UniqueSocket bind_listen_socket(const std::string & host, int port) {
+ 
+ void handle_client(SocketHandle client, IHttpHandler & handler, uint64_t max_request_body_bytes) {
+     UniqueSocket socket(client);
++    const int no_delay = 1;
++    setsockopt(client, IPPROTO_TCP, TCP_NODELAY,
++        reinterpret_cast<const char *>(&no_delay), sizeof(no_delay));
+     try {
+         std::string leftover;
+         auto request = read_http_request(socket.get(), max_request_body_bytes, leftover);
+diff --git a/include/engine/models/breeze_tts/generator.h b/include/engine/models/breeze_tts/generator.h
+index 7b3a95f..dfd21ed 100644
+--- a/include/engine/models/breeze_tts/generator.h
++++ b/include/engine/models/breeze_tts/generator.h
+@@ -7,6 +7,7 @@
+ #include "engine/models/breeze_tts/tokenizer_text.h"
+ 
+ #include <memory>
++#include <functional>
+ #include <optional>
+ #include <string>
+ #include <vector>
+@@ -38,7 +39,8 @@ public:
+         engine::assets::TensorStorageType storage_type);
+     ~BreezeGeneratorRuntime();
+ 
+-    engine::runtime::AudioBuffer generate(const BreezeGenerationRequest & request);
++    engine::runtime::AudioBuffer generate(const BreezeGenerationRequest & request,
++        const std::function<void(const engine::runtime::AudioBuffer &)> & sink = {});
+     BreezeSpeechCodes encode_reference(const engine::runtime::AudioBuffer & audio) const;
+ 
+ private:
+diff --git a/include/engine/models/breeze_tts/session.h b/include/engine/models/breeze_tts/session.h
+index 8c839da..b0b47d6 100644
+--- a/include/engine/models/breeze_tts/session.h
++++ b/include/engine/models/breeze_tts/session.h
+@@ -79,6 +79,7 @@ private:
+     engine::runtime::AudioBuffer stream_merged_audio_;
+     size_t stream_chunk_index_ = 0;
+     bool stream_started_ = false;
++    engine::runtime::StreamEventCallback stream_event_sink_;
+ };
+ 
+ }  // namespace engine::models::breeze_tts
+diff --git a/scripts/build_windows.ps1 b/scripts/build_windows.ps1
+index 527cef2..9c38f8e 100644
+--- a/scripts/build_windows.ps1
++++ b/scripts/build_windows.ps1
+@@ -4,6 +4,7 @@ param(
+     [string]$Target = "audiocpp_cli",
+     [int]$Jobs = 0,
+     [switch]$ConfigureOnly,
++    [switch]$DynamicBackends,
+     [switch]$Clean,
+     [string]$CudaArchitectures = "auto",
+     [ValidateSet("", "native", "avx2", "baseline")]
+@@ -182,7 +183,10 @@ function Find-VsNinja {
+ 
+ function Find-WindowsKitTool {
+     param([Parameter(Mandatory = $true)][string]$Name)
++    $kitRegistry = Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows Kits\Installed Roots' -ErrorAction SilentlyContinue
++    $kitRoot = if ($kitRegistry) { $kitRegistry.KitsRoot10 } else { '' }
+     return Find-FirstFile @(
++        "$kitRoot\bin\*\x64\$Name",
+         "C:\Program Files (x86)\Windows Kits\10\bin\*\x64\$Name",
+         "C:\Program Files\Windows Kits\10\bin\*\x64\$Name"
+     )
+@@ -577,6 +581,7 @@ $configureArgs = @(
+     "-DOpenMP_CXX_FLAGS=/openmp:experimental",
+     "-DENGINE_ENABLE_CUDA=$($settings.EnableCuda)",
+     "-DENGINE_ENABLE_OPENMP=ON",
++    "-DENGINE_ENABLE_CPU_ALL_VARIANTS=$($DynamicBackends.IsPresent.ToString().ToUpperInvariant())",
+     "-DENGINE_ENABLE_CUDA_GRAPHS=$($settings.EnableCudaGraphs)",
+     "-DENGINE_ENABLE_VULKAN=$($settings.EnableVulkan)",
+     "-DENGINE_ENABLE_METAL=OFF",
+diff --git a/src/models/breeze_tts/generator.cpp b/src/models/breeze_tts/generator.cpp
+index 28458f1..dfce565 100644
+--- a/src/models/breeze_tts/generator.cpp
++++ b/src/models/breeze_tts/generator.cpp
+@@ -17,6 +17,7 @@
+ #include <chrono>
+ #include <cmath>
+ #include <cstdint>
++#include <cstdlib>
+ #include <limits>
+ #include <memory>
+ #include <random>
+@@ -943,7 +944,8 @@ struct BreezeGeneratorRuntime::Impl {
+         return frame;
+     }
+ 
+-    runtime::AudioBuffer generate(const BreezeGenerationRequest & request) {
++    runtime::AudioBuffer generate(const BreezeGenerationRequest & request,
++        const std::function<void(const runtime::AudioBuffer &)> & sink) {
+         if (request.text.empty()) {
+             throw std::runtime_error("BreezeTTS requires text");
+         }
+@@ -999,11 +1001,43 @@ struct BreezeGeneratorRuntime::Impl {
+             }
+         });
+         engine::debug::timing_log_scalar("breeze_tts.generate.prompt_ms", prompt_ms);
+-        text_encoder.release_runtime_graphs();
++        // Keep the reusable text graph resident between streaming requests.
+         double backbone_cond_decode_ms = 0.0;
+         double backbone_uncond_decode_ms = 0.0;
+         std::vector<int32_t> first_codebook_history;
+         std::vector<int32_t> codes;
++        int64_t emitted_frames = 0;
++        runtime::AudioBuffer streamed_audio{24000, 1, {}};
++        auto stream_setting = [](const char * name, int fallback) {
++            const char * value = std::getenv(name);
++            return value ? std::clamp(std::atoi(value), 1, 100) : fallback;
++        };
++        const int first_frames = stream_setting("BREEZE_STREAM_FIRST_FRAMES", 1);
++        const int chunk_frames = stream_setting("BREEZE_STREAM_CHUNK_FRAMES", 8);
++        auto emit_audio = [&](bool final) {
++            if (!sink) return;
++            const int64_t frames = static_cast<int64_t>(codes.size()) / config.num_codebooks;
++            const int64_t pending = frames - emitted_frames;
++            // Build a small playback reserve before switching to efficient larger packets.
++            const int target = emitted_frames == 0 ? first_frames :
++                emitted_frames < 4 ? 1 : emitted_frames < 12 ? 4 : chunk_frames;
++            if (pending <= 0 || (!final && pending < target)) return;
++            // The codec's upstream offline decoder also uses 25 left-context frames.
++            // Keep that context, then emit only newly generated samples.
++            const int64_t context = std::min<int64_t>(25, emitted_frames);
++            BreezeSpeechCodes window;
++            window.code_groups = config.num_codebooks;
++            window.frames = context + pending;
++            window.codes.assign(codes.begin() + (emitted_frames - context) * config.num_codebooks, codes.end());
++            auto audio = speech_decoder->decode(window);
++            const size_t drop = static_cast<size_t>(context * 1920);
++            if (drop > audio.samples.size()) throw std::runtime_error("stream codec context exceeds output");
++            audio.samples.erase(audio.samples.begin(), audio.samples.begin() + drop);
++            for (auto & sample : audio.samples) sample = std::clamp(sample, -1.0F, 1.0F);
++            streamed_audio.samples.insert(streamed_audio.samples.end(), audio.samples.begin(), audio.samples.end());
++            sink(audio);
++            emitted_frames = frames;
++        };
+         double backbone_cond_prefill_ms = 0.0;
+         double backbone_uncond_prefill_ms = 0.0;
+         const double ar_ms = engine::debug::measure_ms([&] {
+@@ -1079,6 +1113,7 @@ struct BreezeGeneratorRuntime::Impl {
+                     offset_blocks);
+                 first_codebook_history.push_back(first_token);
+                 codes.insert(codes.end(), frame.begin(), frame.end());
++                emit_audio(false);
+                 const auto embedded = frame_embedding(
+                     weights->audio_embedding,
+                     config.num_codebooks * config.vocab_size,
+@@ -1106,6 +1141,11 @@ struct BreezeGeneratorRuntime::Impl {
+         engine::debug::timing_log_scalar("breeze_tts.ar.backbone_uncond_prefill_ms", backbone_uncond_prefill_ms);
+         engine::debug::timing_log_scalar("breeze_tts.ar.backbone_cond_decode_ms", backbone_cond_decode_ms);
+         engine::debug::timing_log_scalar("breeze_tts.ar.backbone_uncond_decode_ms", backbone_uncond_decode_ms);
++        if (sink) {
++            emit_audio(true);
++            if (streamed_audio.samples.empty()) throw std::runtime_error("BreezeTTS generated no streaming audio");
++            return streamed_audio;
++        }
+         backbone_cond->release_runtime_graphs();
+         if (use_cfg) {
+             backbone_uncond->release_runtime_graphs();
+@@ -1163,9 +1203,10 @@ BreezeGeneratorRuntime::BreezeGeneratorRuntime(
+ 
+ BreezeGeneratorRuntime::~BreezeGeneratorRuntime() = default;
+ 
+-engine::runtime::AudioBuffer BreezeGeneratorRuntime::generate(const BreezeGenerationRequest & request) {
++engine::runtime::AudioBuffer BreezeGeneratorRuntime::generate(const BreezeGenerationRequest & request,
++    const std::function<void(const engine::runtime::AudioBuffer &)> & sink) {
+     const auto start = Clock::now();
+-    auto audio = impl_->generate(request);
++    auto audio = impl_->generate(request, sink);
+     engine::debug::timing_log_scalar("breeze_tts.generate.total_ms", engine::debug::elapsed_ms(start));
+     return audio;
+ }
+diff --git a/src/models/breeze_tts/session.cpp b/src/models/breeze_tts/session.cpp
+index 10f7e5e..2ad66a8 100644
+--- a/src/models/breeze_tts/session.cpp
++++ b/src/models/breeze_tts/session.cpp
+@@ -263,9 +263,15 @@ std::optional<runtime::StreamEvent> BreezeTTSSession::next_stream_event() {
+     }
+     const size_t chunk_index = stream_chunk_index_++;
+     auto chunk_audio = generator_->generate(
+-        build_generation_request(stream_chunk_requests_[chunk_index], stream_reference_codes_, chunk_index));
++        build_generation_request(stream_chunk_requests_[chunk_index], stream_reference_codes_, chunk_index),
++        stream_event_sink_ ? std::function<void(const runtime::AudioBuffer &)>([this](const runtime::AudioBuffer & audio) {
++            runtime::StreamEvent event;
++            event.audio_output = audio;
++            stream_event_sink_(event);
++        }) : std::function<void(const runtime::AudioBuffer &)>{});
+     runtime::append_audio_buffer(stream_merged_audio_, chunk_audio);
+     runtime::StreamEvent event;
++    if (stream_event_sink_) return event;
+     event.named_audio_outputs.push_back({
+         "chunk_" + std::to_string(chunk_index),
+         std::move(chunk_audio),
+@@ -275,7 +281,7 @@ std::optional<runtime::StreamEvent> BreezeTTSSession::next_stream_event() {
+ }
+ 
+ void BreezeTTSSession::set_stream_event_sink(runtime::StreamEventCallback sink) {
+-    (void)sink;
++    stream_event_sink_ = std::move(sink);
+ }
+ 
+ runtime::TaskResult BreezeTTSSession::finish_stream() {
+diff --git a/src/models/breeze_tts/speech_decoder.cpp b/src/models/breeze_tts/speech_decoder.cpp
+index bd1c220..ea08696 100644
+--- a/src/models/breeze_tts/speech_decoder.cpp
++++ b/src/models/breeze_tts/speech_decoder.cpp
+@@ -1086,6 +1086,11 @@ runtime::AudioBuffer BreezeSpeechDecoderRuntime::decode(const BreezeSpeechCodes
+         }
+         const int threads = std::max(1, execution_context_->config().threads);
+         auto * graph_slot = &graph_;
++        // Retain the tiny startup windows independently of the steady-state graph.
++        if (execution_context_->backend_type() == core::BackendType::Cuda) {
++            if (chunk_frames == 1) graph_slot = &optimized_graphs_[0];
++            else if (chunk_frames == 3) graph_slot = &optimized_graphs_[1];
++        }
+ #if defined(ENGINE_HIP_STRIX_HALO_OPTIMIZATIONS)
+         const bool optimized_cache_enabled =
+             kStrixHaloGraphCacheEnabled && execution_context_->backend_type() == core::BackendType::Hip;

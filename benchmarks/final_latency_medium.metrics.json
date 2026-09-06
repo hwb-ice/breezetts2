@@ -1,0 +1,12 @@
+{
+  "name": "final_latency_medium",
+  "chunk": 120,
+  "cfg": 1,
+  "elapsed_s": 3.8919095000001107,
+  "audio_s": 6.8,
+  "rtf": 0.5723396323529575,
+  "first_audio_s": 0.21959070000002612,
+  "chunks": 16,
+  "playback_gap_count": 0,
+  "playback_gap_s": 0
+}
