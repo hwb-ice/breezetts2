@@ -35,11 +35,7 @@ powershell -ExecutionPolicy Bypass -File .\build.ps1
 
 构建脚本固定上游提交 `a2a4d4f34c0960edf1bf78e392de1fbce5a855e6`，应用 [原生补丁](patches/audio-cpp-streaming.patch)，编译 Breeze 专用运行时，并下载 v0.7.2 Windows CUDA 12.4 发布包中的 CUDA 后端与运行库。无需重新编译 CUDA 内核。Visual Studio 不在默认位置时可传 `-VsInstall 'D:\vstudio'`。
 
-模型权重不随本仓库分发。下载 [Breeze TTS 2 Q8 GGUF](https://huggingface.co/audio-cpp/audio.cpp-gguf/tree/main/Breeze-TTS-2-GGUF)，放入 `models/Breeze-TTS-2-GGUF/`。已验证的 Q8 文件 SHA256：
-
-```text
-0de52d61560f9f6b2dfeca79f9100f8fce0c2b17c52ec30622e23e150df1ad88
-```
+模型权重不随本仓库分发。下载 [Breeze TTS 2 Q8 GGUF](https://huggingface.co/audio-cpp/audio.cpp-gguf/tree/main/Breeze-TTS-2-GGUF)，放入 `models/Breeze-TTS-2-GGUF/`。
 
 本机测评使用从 Q8 再量化得到的 Q4_K 文件。首次使用可以先将 `server.json` 中模型路径改为 Q8 文件；按 [模型准备说明](MODEL_SETUP.md) 转换后再切回 Q4_K。Q8 显存压力更高，不应套用表中的 Q4_K 数值。
 
