@@ -67,3 +67,9 @@ python benchmark.py --name local --chunk 120 --url http://127.0.0.1:7861/speech
 ## 许可与来源
 
 项目代码及上游补丁使用 Apache-2.0，保留 [audio.cpp](https://github.com/0xShug0/audio.cpp) 许可声明。Breeze TTS 2 模型、衍生权重和自托管输出另受 [BreezeBlue 模型许可](https://github.com/breezeblue-ai/breeze-tts/blob/main/MODEL_LICENSE)约束，限研究与非商业用途；代码许可不授予模型商用权利。
+
+## 副本说明
+
+本仓库是 [https://github.com/Emilia296/breezetts2](https://github.com/Emilia296/breezetts2) 的副本，保留上游完整提交历史，仅供个人使用。
+
+代码采用 Apache-2.0 许可（`LICENSE` 保持上游原文，未作修改）。Breeze TTS 2 模型权重不包含在本仓库中，其使用受 BreezeBlue 模型许可约束，仅限研究与非商业用途。
